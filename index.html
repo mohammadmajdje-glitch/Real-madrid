@@ -109,6 +109,14 @@ body[data-tab=fin] #tab-fin{display:block}
 #modal .x{position:absolute;inset-inline-start:10px;top:10px;padding:2px 10px}
 td small{display:block;color:var(--mute)}
 .lg{width:24px;height:24px;object-fit:contain;flex:none}
+
+#tweets{position:fixed;top:calc(84px + env(safe-area-inset-top,0px));inset-inline-start:10px;width:min(300px,82vw);z-index:15;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.tw-pop{pointer-events:auto;animation:twin .35s ease-out}@keyframes twin{from{transform:translateX(-30px);opacity:0}to{transform:none;opacity:1}}
+.tw{display:flex;gap:8px;background:#fff;border:1px solid #DDE3EE;border-radius:14px;padding:10px;box-shadow:0 6px 18px rgba(8,21,46,.18);color:#0B1D3F;margin-top:6px}
+.tw-av{width:34px;height:34px;border-radius:50%;color:#fff;display:grid;place-items:center;font-weight:700;flex:none}.tw-b{min-width:0}
+.tw-h{display:flex;gap:4px;align-items:center;font-size:13px;flex-wrap:wrap}.tick{color:#1d9bf0;font-size:11px}.tw-h small{color:#8a93a6}
+.tw-t{font-size:13.5px;margin:3px 0 5px;line-height:1.6}.tw-f{display:flex;gap:10px;font-size:11px;color:#8a93a6}
+.scout{margin-top:8px;padding:8px 10px;background:#FBF3DC;border-radius:10px;font-size:12.5px;line-height:1.7;color:#0B1D3F}
 </style>
 </head>
 <body data-tab="office">
@@ -187,6 +195,7 @@ td small{display:block;color:var(--mute)}
 </nav>
 <div id="toast"></div>
 <div id="modal" hidden></div>
+<div id="tweets"></div>
 <script>
 'use strict';
 /* ============ ابزارها ============ */
@@ -300,14 +309,15 @@ function renderChat() {
   else box.innerHTML = S.chat.map(m => {
     if (m.role === 'me') return `<div class="msg me">${esc(m.text)}</div>`;
     if (m.role === 'sys') return `<div class="msg sys">${esc(m.text)}</div>`;
-    const news = (m.news || []).length ? `<div class="news">${m.news.map(n => `<div><b>${esc(n.src)}</b> ${esc(n.headline)}</div>`).join('')}</div>` : '';
+    const news = (m.news || []).length ? `<div class="news">${m.news.map(tweetHTML).join('')}</div>` : '';
     const notes = (m.notes || []).map(n => `<span class="note">${esc(n)}</span>`).join('');
-    return `<div class="msg ai">${esc(m.text)}${news}${notes}${m.verified === false ? '<div class="warn">⚠️ این اطلاعات تأیید نشده / تقریبی است</div>' : ''}</div>`;
+    return `<div class="msg ai">${esc(m.text)}${(m.scout || []).length ? `<div class="scout">🔎 گزارش اسکات (FotMob)<br>${m.scout.map(esc).join(' · ')}</div>` : ''}${news}${notes}${m.verified === false ? '<div class="warn">⚠️ این اطلاعات تأیید نشده / تقریبی است</div>' : ''}</div>`;
   }).join('');
   renderHeader(); save();
 }
 function applyReply(r) {
   const e = r.effects || {};
+  S.rel = S.rel || {}; if (r.rel && r.rel.club) S.rel[r.rel.club] = clamp((S.rel[r.rel.club] ?? 50) + (+r.rel.delta || 0), 0, 100);
   S.board = clamp(S.board + (+e.board || 0), 0, 100);
   S.coach = clamp(S.coach + (+e.coach || 0), 0, 100);
   S.fans = clamp(S.fans + (+e.fans || 0), 0, 100);
@@ -315,6 +325,7 @@ function applyReply(r) {
   if (+r.days) S.date = addDays(S.date, clamp(+r.days, 0, 60));
   const notes = [];
   (r.actions || []).forEach(a => {
+    if ((a.type === 'sign' || a.type === 'sell') && !windowOpen(S.date)) { notes.push('⛔ بازار بسته است؛ ثبت نشد: ' + (a.name || '')); return; }
     if (a.type === 'fire_coach') { S.coachName = ''; S.coachEdited = true; S.coach = 50; notes.push('🚪 اخراج مربی (با رأی هیئت‌مدیره)'); }
     else if (a.type === 'hire_coach' && a.name) { S.coachName = a.name; S.coachEdited = true; notes.push('🧢 مربی جدید: ' + a.name); }
     else if (a.type === 'sponsor' && a.name) { S.sponsors.push({ name: a.name, value: +a.value || 0, note: a.note || '' }); notes.push('🤝 اسپانسر: ' + a.name); }
@@ -327,7 +338,7 @@ function applyReply(r) {
       if (i >= 0) { S.lineup = S.lineup.filter(id => id !== S.squad[i].id); S.squad.splice(i, 1); S.moved[a.name] = 'out'; notes.push('👋 فروش: ' + a.name); }
     }
   });
-  S.chat.push({ role: 'ai', text: r.narration || '', news: r.news || [], notes, verified: r.verified !== false });
+  S.chat.push({ role: 'ai', text: r.narration || '', news: r.news || [], scout: r.scout || [], notes, verified: r.verified !== false });
 }
 async function sendChat(text) {
   S.chat.push({ role: 'me', text }); renderChat();
@@ -342,7 +353,7 @@ async function sendChat(text) {
     const history = S.chat.filter(m => m !== wait).slice(-12);
     const r = S.server ? await api('/api/chat', { method: 'POST', body: JSON.stringify({ message: text, state, history }) }) : await freeChat(text, state, history);
     S.chat.splice(S.chat.indexOf(wait), 1);
-    applyReply(r);
+    applyReply(r); showTweets(r.news);
   } catch (e) {
     S.chat.splice(S.chat.indexOf(wait), 1);
     S.chat.push({ role: 'sys', text: '⚠️ خطا: ' + e.message });
@@ -383,7 +394,7 @@ $('#results').onclick = async e => {
   const n = it.dataset.n;
   if (!e.target.closest('button')) return openProfile(kind, it.dataset.id, n);
   if (e.target.classList.contains('o')) {
-    $('#msg').value = kind === 'player' ? `می‌خواهم ${n} را بخرم. با باشگاه و ایجنت او مذاکره کن و پیشنهاد اولیه من: ` : `می‌خواهم با ${n} برای سرمربیگری مذاکره کنم. `;
+    S.target = { id: it.dataset.id, name: n, kind }; $('#msg').value = kind === 'player' ? `می‌خواهم ${n} را بخرم. با باشگاه و ایجنت او مذاکره کن و پیشنهاد اولیه من: ` : `می‌خواهم با ${n} برای سرمربیگری مذاکره کنم. `;
     show('office'); $('#msg').focus();
   } else if (e.target.classList.contains('v') && S.fm) { openProfile(kind, it.dataset.id, n); }
   else if (e.target.classList.contains('v')) {
@@ -554,9 +565,9 @@ function renderClub() {
   $('#setServer').value = S.server; $('#setFm').value = S.fm || ''; $('#setToken').value = S.token;
   $('#results-list').innerHTML = S.results.length ? S.results.slice().reverse().map(r => `<div class="item"><span class="ovr" style="${r.outcome === 'W' ? 'background:#D6EFE2' : r.outcome === 'L' ? 'background:#F7DADA' : ''}">${{ W: 'برد', D: 'مس', L: 'باخت' }[r.outcome]}</span><div class="grow">${esc(r.text)}</div></div>`).join('') : '<p class="hint">هنوز بازی‌ای انجام نشده.</p>';
 }
-$('#saveSet').onclick = () => { S.server = $('#setServer').value.trim(); S.token = $('#setToken').value.trim(); S.fm = $('#setFm').value.trim(); save(); toast('ذخیره شد'); };
+$('#saveSet').onclick = () => { S.server = $('#setServer').value.trim(); S.token = $('#setToken').value.trim(); S.fm = normUrl($('#setFm').value); save(); toast('ذخیره شد'); };
 $('#sync').onclick = async () => {
-  S.server = $('#setServer').value.trim(); S.token = $('#setToken').value.trim(); S.fm = $('#setFm').value.trim();
+  S.server = $('#setServer').value.trim(); S.token = $('#setToken').value.trim(); S.fm = normUrl($('#setFm').value);
   const msg = $('#syncMsg'); msg.textContent = '⏳ دریافت ترکیب رئال مادرید...';
   try {
     if (S.fm) { await fmSync(msg); return; }
@@ -578,15 +589,15 @@ $('#msg').addEventListener('input', e => { e.target.style.height = 'auto'; e.tar
 
 /* ===== گفتگوی هوش مصنوعی رایگان (Workers AI روی همان Worker) ===== */
 function windowOpen(iso) { const m = +iso.slice(5, 7), d = +iso.slice(8, 10); return m === 1 || (m === 2 && d <= 2) || (m >= 7 && m <= 8) || (m === 6 && d >= 15) || (m === 9 && d <= 1); }
-function parseJSON(t) { const a = t.indexOf('{'), b = t.lastIndexOf('}'); if (a >= 0 && b > a) { try { return JSON.parse(t.slice(a, b + 1)); } catch { } } return { narration: t }; }
 async function freeChat(text, s, history) {
-  const open = windowOpen(s.date), next = S.fixtures.slice(0, 3).map(f => `${f.date} ${f.home.name}-${f.away.name} (${f.comp})`).join(' | ');
+  const scout = await scoutReport(text), open = windowOpen(s.date), next = S.fixtures.slice(0, 3).map(f => `${f.date} ${f.home.name}-${f.away.name} (${f.comp})`).join(' | ');
   const system = `تو موتور رول‌پلی بازی «رئیس رئال مادرید» هستی. کاربر رئیس باشگاه (مثل فلورنتینو پرز) در فصل ۲۰۲۶/۲۷ است. تاریخ: ${s.date}. بودجه: ${s.budget} میلیون یورو. مربی: ${s.coachName || 'ندارد'}. بازار نقل‌وانتقالات: ${open ? 'باز' : 'بسته (خرید و فروش نهایی ممکن نیست؛ فقط بازیکن آزاد یا توافق اولیه برای پنجره بعدی)'}.
-قوانین: فارسی و کوتاه و صحنه‌ای. مربی، هیئت‌مدیره، ایجنت‌ها، باشگاه‌ها و رسانه هر کدام با شخصیت خودشان واکنش نشان می‌دهند. سخت‌گیر و واقع‌گرا: پیشنهاد ضعیف رد می‌شود، بازیکن ممکن است نخواهد بیاید. فقط بازیکنان و مربیان واقعی. عددی را که مطمئن نیستی نساز و بگو تقریبی است. مربی ترکیب را می‌بندد نه رئیس. اخراج مربی یا فسخ قرارداد فقط با رأی هیئت‌مدیره (اعضا و دلیلشان را نشان بده؛ ممکن است رد شود). بازیکن خریداری‌شده دیگر برای باشگاه قبلی بازی نمی‌کند.
+قوانین: فارسی و کوتاه و صحنه‌ای و فقط فارسی (بدون چینی/انگلیسی). خبرها ۱ تا ۳ مورد کوتاه شبیه توییت باشند و نام رسانه‌ها فقط ساختگی باشد (مثل مادرید ایندکس، کانال سفید، ترنسفر رادار، اسپورت‌وایر)؛ هرگز نام خبرنگار یا رسانه واقعی نیاور و از افراد واقعی نقل‌قول جعلی نساز. مربی، هیئت‌مدیره، ایجنت‌ها، باشگاه‌ها و رسانه هر کدام با شخصیت خودشان واکنش نشان می‌دهند. سخت‌گیر و واقع‌گرا: پیشنهاد ضعیف رد می‌شود، بازیکن ممکن است نخواهد بیاید. فقط بازیکنان و مربیان واقعی. عددی را که مطمئن نیستی نساز و بگو تقریبی است. مربی ترکیب را می‌بندد نه رئیس. اخراج مربی یا فسخ قرارداد فقط با رأی هیئت‌مدیره (اعضا و دلیلشان را نشان بده؛ ممکن است رد شود). بازیکن خریداری‌شده دیگر برای باشگاه قبلی بازی نمی‌کند.
 ترکیب فعلی (نام|پست|رتبه|سن): ${s.squad.map(p => `${p.name}|${p.pos}|${p.ovr}|${p.age}`).join('; ')}
 بازی‌های بعدی: ${next}. نتایج اخیر: ${(s.results || []).join(' ، ') || '—'}. رضایت: هیئت‌مدیره ${s.board} مربی ${s.coach} هواداران ${s.fans}.
+${scout.prompt}
 فقط یک JSON معتبر برگردان، بدون توضیح و بدون بک‌تیک:
-{"narration":"...","news":[{"src":"مارکا","headline":"..."}],"effects":{"board":0,"coach":0,"fans":0,"budget":0},"days":0,"actions":[{"type":"sign","name":"","pos":"GK|DF|MF|FW","age":0,"ovr":0,"value":0,"from":""},{"type":"sell","name":"","to":""},{"type":"fire_coach"},{"type":"hire_coach","name":""},{"type":"release","name":""},{"type":"sponsor","name":"","value":0,"note":""}]}
+{"narration":"...","news":[{"src":"نام رسانه ساختگی","headline":"متن کوتاه شبیه توییت"}],"rel":{"club":"","delta":0},"effects":{"board":0,"coach":0,"fans":0,"budget":0},"days":0,"actions":[{"type":"sign","name":"","pos":"GK|DF|MF|FW","age":0,"ovr":0,"value":0,"from":""},{"type":"sell","name":"","to":""},{"type":"fire_coach"},{"type":"hire_coach","name":""},{"type":"release","name":""},{"type":"sponsor","name":"","value":0,"note":""}]}
 effects تغییر (delta) است و budget به میلیون یورو (منفی=هزینه). action فقط وقتی معامله واقعاً نهایی شد.`;
   const msgs = history.filter(m => m.role === 'me' || m.role === 'ai').map(m => ({ role: m.role === 'me' ? 'user' : 'assistant', content: m.text || '...' }));
   while (msgs.length && msgs[0].role !== 'user') msgs.shift();
@@ -595,8 +606,48 @@ effects تغییر (delta) است و budget به میلیون یورو (منفی
   clean.push({ role: 'user', content: text });
   const r = await fetch(S.fm.replace(/\/$/, '') + '/ai', { method: 'POST', body: JSON.stringify({ system, messages: clean }) });
   const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error || r.status);
-  if (!d.text) throw new Error('مدل پاسخ خالی داد. ' + (d.debug || ''));
-  const out = parseJSON(d.text); if (!out.narration) out.narration = d.text; out.verified = false; return out;
+  const txt = d.text || deepText(d.raw); if (!txt) throw new Error('مدل پاسخ خالی داد. ' + (d.debug || ''));
+  const out = parseJSON(txt); if (!out.narration) out.narration = txt; out.verified = false; out.scout = scout.lines; return out;
+}
+function normUrl(u) { u = String(u || '').trim(); if (u && !/^https?:\/\//i.test(u)) u = 'https://' + u; return u.replace(/\/+$/, ''); }
+
+/* ===== اخبار توییتی، اسکات، پارس مقاوم ===== */
+const TW_COL = ['#1d9bf0', '#e0245e', '#17bf63', '#f5a623', '#794bc4', '#ff7a00'];
+function tweetHTML(n) {
+  const src = String(n.src || 'خبر').trim(), q = String(n.headline || ''), h = [...src + q].reduce((a, c) => a + c.charCodeAt(0), 0);
+  return `<div class="tw"><div class="tw-av" style="background:${TW_COL[h % TW_COL.length]}">${esc(src[0] || '؟')}</div><div class="tw-b"><div class="tw-h"><b>${esc(src)}</b><span class="tick">✔</span><small>@${esc(src.replace(/\s+/g, '_'))}</small></div><div class="tw-t">${esc(q)}</div><div class="tw-f"><span>💬 ${h % 900 + 40}</span><span>🔁 ${h * 7 % 300 + 12}</span><span>❤ ${h * 13 % 2400 + 80}</span><span>الان</span></div></div></div>`;
+}
+function showTweets(list) {
+  const box = $('#tweets');
+  (list || []).slice(0, 3).forEach((n, i) => setTimeout(() => {
+    const d = document.createElement('div'); d.className = 'tw-pop'; d.innerHTML = tweetHTML(n); d.onclick = () => d.remove();
+    box.appendChild(d); setTimeout(() => d.remove(), 8000);
+  }, i * 1500));
+}
+function deepText(o) { let best = ''; fmWalk(o, x => { for (const k of ['content', 'response', 'text']) if (typeof x[k] === 'string' && x[k].length > best.length) best = x[k]; }); return best; }
+function parseJSON(t) {
+  t = String(t).replace(/```json|```/g, '').replace(/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/g, '');
+  const a = t.indexOf('{'), b = t.lastIndexOf('}');
+  if (a >= 0 && b > a) { try { return JSON.parse(t.slice(a, b + 1)); } catch { } }
+  const m = t.match(/"narration"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  const news = [...t.matchAll(/"src"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"headline"\s*:\s*"((?:[^"\\]|\\.)*)"/g)].map(x => ({ src: x[1], headline: x[2] }));
+  return { narration: m ? m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"') : t.replace(/[{}"\\]/g, ' ').slice(0, 600), news };
+}
+async function scoutReport(text) {
+  const t = S.target, none = { prompt: '', lines: [] };
+  if (!S.fm || !t || !t.id || isNaN(+t.id)) return none;
+  const nn = fmNorm(text), full = fmNorm(t.name);
+  if (!nn.includes(full) && !nn.includes(full.split(' ').pop())) return none;
+  try {
+    const d = await fm(`/players/${t.id}/x`), info = []; let club = '';
+    fmWalk(d, o => {
+      if (!club && o.primaryTeam && o.primaryTeam.teamName) club = o.primaryTeam.teamName;
+      if (Array.isArray(o.playerInformation)) o.playerInformation.forEach(i => { const v = i.value, val = typeof v === 'object' && v ? (v.fallback ?? v.key ?? '') : v; if (val !== '' && val != null) info.push((i.title || i.translationKey || '') + ': ' + val); });
+    });
+    S.rel = S.rel || {}; const rel = S.rel[club] ?? 50;
+    const lines = [club ? 'باشگاه فعلی: ' + club : 'باشگاه فعلی: نامشخص (شاید آزاد)', ...[...new Set(info)].slice(0, 10), 'رابطه ما با باشگاه: ' + rel + '/100'];
+    return { lines, club, prompt: `گزارش اسکات واقعی از FotMob درباره ${t.name} (به این اعتماد کن نه حدس خودت): ${lines.join(' | ')}. بر همین اساس در narration بگو: نظر باشگاه فعلی، سطح رابطه ما با آن باشگاه، قابل‌انتقال بودن (قرارداد و شرایط)، و اینکه سر کار است یا آزاد. پیشنهاد ضعیف را رد کن. تغییر رابطه را در rel بگذار.` };
+  } catch { return none; }
 }
 /* ===== FotMob (رایگان، از طریق Worker) ===== */
 const FMRM = 8633, fmCache = new Map();
@@ -683,7 +734,7 @@ async function fmProfile(pf, id) {
 }
 const fmLogo = (t, f) => f.fm ? `<img class="lg" loading="lazy" src="https://images.fotmob.com/image_resources/logo/teamlogo/${t.id === MADRID ? FMRM : t.id}.png" onerror="this.remove()">` : '';
 $('#fmTest').onclick = async () => {
-  const m = $('#syncMsg'); S.fm = $('#setFm').value.trim(); if (!S.fm) return toast('آدرس Worker را وارد کن'); save(); m.textContent = '⏳ تست...';
+  const m = $('#syncMsg'); S.fm = normUrl($('#setFm').value); if (!S.fm) return toast('آدرس Worker را وارد کن'); save(); m.textContent = '⏳ تست...';
   try {
     const s = await fm('mbappe', 'search'), d = await fm(`/teams/${FMRM}/overview/real-madrid`), q = fmSquad(d), fx = fmFix(d);
     m.textContent = `✅ اتصال برقرار است | جستجو: ${Object.keys(s).join(',')} | بازیکن: ${q.players.length} | مربی: ${q.coach || '—'} | بازی: ${fx.length} | کلیدها: ${Object.keys(d).slice(0, 8).join(',')}`;
@@ -726,6 +777,7 @@ function renderFin() {
 }
 $('#finGo').onclick = async () => { if (!S.server) return toast('اطلاعات مالی واقعی به جستجوی وب (سرور هوش مصنوعی پولی) نیاز دارد'); const b = $('#finGo'); b.textContent = '⏳...'; try { S.clubInfo = (await api('/api/club')).text; save(); renderFin(); } catch (e) { toast('⚠️ ' + e.message); } b.textContent = 'دریافت اطلاعات مالی واقعی'; };
 $('#powers').onclick = e => { const b = e.target.closest('button'); if (b) { show('office'); $('#msg').value = b.dataset.t; $('#msg').focus(); } };
+S.fm = normUrl(S.fm); S.server = normUrl(S.server);
 setInterval(() => { if ((S.server || S.fm) && S.real) $('#sync').click(); }, 30 * 60 * 1000);
 show('office');
 </script>
